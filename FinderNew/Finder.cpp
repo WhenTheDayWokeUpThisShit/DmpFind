@@ -8,8 +8,60 @@
 #include <regex>
 #include <Aclapi.h>
 #include <AccCtrl.h>
+#include <map>
 
 namespace fs = std::filesystem;
+
+enum class Lang { TR, EN };
+
+Lang systemLang = Lang::EN;
+
+// Lang MAP
+std::map<std::string, std::string> tr = {
+    {"ask", "Olay raporlari eklensin mi?\n1 - Evet\n2 - Hayir\nSeciminiz: "},
+    {"invalid", "Gecersiz secim, varsayilan olarak Hayir seçildi.\n"},
+    {"desktop_not_found", "Masaustu yolu bulunamadi."},
+    {"report_fail", "Rapor dosyasý olusturulamadý."},
+    {"copy_success", " dosyasi kopyalandi."},
+    {"copy_fail", "Kopyalama hatasi: "},
+    {"log_copy", " log dosyasi kopyalandi."},
+    {"log_copy_fail", "Log kopyalama hatasi: "},
+    {"log_missing", " bulunamadi."},
+    {"log_filter_fail", " loglari filtrelenirken hata olustu."},
+    {"log_filter_ok", " loglari filtrelenip dosyasina kaydedildi."},
+    {"report_summary", "Taranan .dmp dosyalari DumpFinder klasorune kopyalanmýstir.\n"},
+    {"report_with_logs", "Ayrýca Application, System ve Security log dosyalari DmpGunluk klasörüne kopyalanmýstir ve kritik olaylar filtrelenmistir.(Beta)\n"},
+    {"report_complete", "Tum islemler tamamlandi. Rapor olusturuldu: "}
+};
+
+std::map<std::string, std::string> en = {
+    {"ask", "Include event logs?\n1 - Yes\n2 - No\nYour choice: "},
+    {"invalid", "Invalid selection, defaulting to No.\n"},
+    {"desktop_not_found", "Desktop path could not be found."},
+    {"report_fail", "Failed to create report file."},
+    {"copy_success", " file copied."},
+    {"copy_fail", "Copy error: "},
+    {"log_copy", " log file copied."},
+    {"log_copy_fail", "Log copy error: "},
+    {"log_missing", " not found."},
+    {"log_filter_fail", " log filtering failed."},
+    {"log_filter_ok", " log filtered and saved to file."},
+    {"report_summary", "Scanned .dmp files copied to DumpFinder folder.\n"},
+    {"report_with_logs", "Also copied Application, System, and Security logs and filtered critical events. (Beta)\n"},
+    {"report_complete", "All operations completed. Report created: "}
+};
+
+std::string msg(const std::string& key) {
+    return systemLang == Lang::TR ? tr[key] : en[key];
+}
+
+Lang DetectSystemLanguage() {
+    LANGID langId = GetUserDefaultUILanguage();
+    if (PRIMARYLANGID(langId) == LANG_TURKISH) {
+        return Lang::TR;
+    }
+    return Lang::EN;
+}
 
 void SetFullControlPermissions(const std::string& filePath) {
     DWORD result = SetNamedSecurityInfoA(
@@ -23,11 +75,10 @@ void SetFullControlPermissions(const std::string& filePath) {
     );
 
     if (result != ERROR_SUCCESS) {
-        std::cerr << "Erisim izinleri ayarlanamadi: " << result << std::endl;
+        std::cerr << "Permission error: " << result << std::endl;
     }
 }
 
-// Finder_1, Finder_2
 std::string GetNewDumpFolderName(const std::string& basePath) {
     int index = 1;
     std::string folderName;
@@ -39,12 +90,13 @@ std::string GetNewDumpFolderName(const std::string& basePath) {
 }
 
 int main() {
-    // Choose?
+    systemLang = DetectSystemLanguage();
+
     int secim = 0;
-    std::cout << "Olay raporlari eklensin mi?\n1 - Evet\n2 - Hayir\nSeciminiz: ";
+    std::cout << msg("ask");
     std::cin >> secim;
     if (secim != 1 && secim != 2) {
-        std::cout << "Gecersiz secim, varsayilan olarak Hayir seçildi.\n";
+        std::cout << msg("invalid");
         secim = 2;
     }
 
@@ -59,143 +111,115 @@ int main() {
     _dupenv_s(&systemRootCStr, &size, "SystemRoot");
     std::string systemRoot(systemRootCStr ? systemRootCStr : "");
     if (systemRootCStr) free(systemRootCStr);
-
-    if (!systemRoot.empty() && systemRoot.back() != '\\') {
-        systemRoot += '\\';
-    }
+    if (!systemRoot.empty() && systemRoot.back() != '\\') systemRoot += '\\';
 
     char desktopPath[MAX_PATH];
     if (SHGetFolderPathA(NULL, CSIDL_DESKTOP, NULL, 0, desktopPath) != S_OK) {
-        std::cerr << "Masaustu yolu bulunamadi." << std::endl;
+        std::cerr << msg("desktop_not_found") << std::endl;
         return 1;
     }
 
-    // Finder_1, Finder_2
     std::string baseDumpFolder = std::string(desktopPath) + "\\DumpFinder";
-    std::string destinationFolder = baseDumpFolder;
-    if (fs::exists(destinationFolder)) {
-        destinationFolder = GetNewDumpFolderName(baseDumpFolder);
-    }
-
+    std::string destinationFolder = fs::exists(baseDumpFolder) ? GetNewDumpFolderName(baseDumpFolder) : baseDumpFolder;
     std::string logFolder = destinationFolder + "\\DmpGunluk";
     std::string reportFilePath = destinationFolder + "\\Rapor.txt";
     std::ofstream reportFile;
 
     try {
-        if (!fs::exists(destinationFolder))
-            fs::create_directory(destinationFolder);
-
-        if (secim == 1) { // only LOG
-            if (!fs::exists(logFolder))
-                fs::create_directory(logFolder);
-        }
+        fs::create_directory(destinationFolder);
+        if (secim == 1) fs::create_directory(logFolder);
 
         reportFile.open(reportFilePath, std::ios::out);
         if (!reportFile.is_open()) {
-            std::cerr << "Rapor dosyasý oluþturulamadý." << std::endl;
+            std::cerr << msg("report_fail") << std::endl;
             return 1;
         }
 
         for (auto& path : paths) {
             std::string fullPath = std::regex_replace(path, std::regex("%SystemRoot%"), systemRoot);
-
             if (fs::exists(fullPath)) {
                 if (fs::is_directory(fullPath)) {
                     for (const auto& entry : fs::directory_iterator(fullPath)) {
                         if (entry.path().extension() == ".dmp") {
                             try {
-                                std::string filename = entry.path().filename().string();
                                 SetFullControlPermissions(entry.path().string());
-
-                                std::string destinationFilePath = destinationFolder + "\\" + filename;
-                                fs::copy_file(entry.path(), destinationFilePath, fs::copy_options::overwrite_existing);
-
-                                reportFile << filename << " dosyasi bulundu (Minidump klasöründe)." << std::endl;
-                                std::cout << filename << " dosyasi kopyalandi." << std::endl;
+                                auto dest = destinationFolder + "\\" + entry.path().filename().string();
+                                fs::copy_file(entry.path(), dest, fs::copy_options::overwrite_existing);
+                                std::cout << entry.path().filename().string() << msg("copy_success") << std::endl;
+                                reportFile << entry.path().filename().string() << " copied." << std::endl;
                             }
                             catch (const std::exception& e) {
-                                std::cerr << "Kopyalama hatasi: " << e.what() << std::endl;
+                                std::cerr << msg("copy_fail") << e.what() << std::endl;
                             }
                         }
                     }
                 }
-                else {
-                    if (fs::path(fullPath).extension() == ".dmp") {
-                        try {
-                            SetFullControlPermissions(fullPath);
-                            std::string actualFileName = fs::path(fullPath).filename().string();
-                            std::string destinationFilePath = destinationFolder + "\\" + actualFileName;
-                            fs::copy_file(fullPath, destinationFilePath, fs::copy_options::overwrite_existing);
-
-                            reportFile << actualFileName << " dosyasi bulundu (Muhtemelen MEMORY.DMP dosyasýdýr)." << std::endl;
-                            std::cout << actualFileName << " dosyasi kopyalandý." << std::endl;
-                        }
-                        catch (const std::exception& e) {
-                            std::cerr << "Kopyalama hatasi: " << e.what() << std::endl;
-                        }
+                else if (fs::path(fullPath).extension() == ".dmp") {
+                    try {
+                        SetFullControlPermissions(fullPath);
+                        auto dest = destinationFolder + "\\" + fs::path(fullPath).filename().string();
+                        fs::copy_file(fullPath, dest, fs::copy_options::overwrite_existing);
+                        std::cout << fs::path(fullPath).filename().string() << msg("copy_success") << std::endl;
+                        reportFile << fs::path(fullPath).filename().string() << " copied." << std::endl;
+                    }
+                    catch (const std::exception& e) {
+                        std::cerr << msg("copy_fail") << e.what() << std::endl;
                     }
                 }
             }
             else {
-                std::cerr << fullPath << " yolu bulunamadý." << std::endl;
+                std::cerr << fullPath << msg("log_missing") << std::endl;
             }
         }
 
-        if (secim == 1) { // Log
+        if (secim == 1) {
             std::string eventLogPath = systemRoot + "System32\\winevt\\Logs\\";
+            std::string evtxLogs[] = { "Application.evtx", "System.evtx", "Security.evtx" };
 
-            // App, Sys, Sec logs
-            std::string evtxLogFiles[] = { "Application.evtx", "System.evtx", "Security.evtx" };
-
-            for (const auto& logName : evtxLogFiles) {
-                std::string fullLogPath = eventLogPath + logName;
-                if (fs::exists(fullLogPath)) {
+            for (const auto& log : evtxLogs) {
+                std::string src = eventLogPath + log;
+                if (fs::exists(src)) {
                     try {
-                        std::string destinationLogPath = logFolder + "\\" + logName;
-                        fs::copy_file(fullLogPath, destinationLogPath, fs::copy_options::overwrite_existing);
-
-                        reportFile << logName << " log dosyasi kopyalandi (DmpGunluk klasorune)." << std::endl;
-                        std::cout << logName << " log dosyasi kopyalandi." << std::endl;
+                        fs::copy_file(src, logFolder + "\\" + log, fs::copy_options::overwrite_existing);
+                        std::cout << log << msg("log_copy") << std::endl;
+                        reportFile << log << " copied." << std::endl;
                     }
                     catch (const std::exception& e) {
-                        std::cerr << "Log kopyalama hatasi: " << e.what() << std::endl;
+                        std::cerr << msg("log_copy_fail") << e.what() << std::endl;
                     }
                 }
                 else {
-                    std::cerr << logName << " bulunamadi." << std::endl;
+                    std::cerr << log << msg("log_missing") << std::endl;
                 }
             }
 
-            // Not sure
             std::string logs[] = { "Application", "System", "Security" };
-            for (const auto& logName : logs) {
-                std::string outputFile = logFolder + "\\" + logName + "_Filtered.txt";
-                std::string command = "wevtutil qe " + logName + " /q:\"*[System[(Level=1 or Level=2 or Level=3)]]\" /f:text > \"" + outputFile + "\"";
-
-                int ret = system(command.c_str());
+            for (const auto& log : logs) {
+                std::string outFile = logFolder + "\\" + log + "_Filtered.txt";
+                std::string cmd = "wevtutil qe " + log + " /q:\"*[System[(Level=1 or Level=2 or Level=3)]]\" /f:text > \"" + outFile + "\"";
+                int ret = system(cmd.c_str());
                 if (ret != 0) {
-                    std::cerr << logName << " loglari filtrelenirken hata olustu." << std::endl;
+                    std::cerr << log << msg("log_filter_fail") << std::endl;
                 }
                 else {
-                    reportFile << logName << " loglari filtrelenip " << outputFile << " dosyasina kaydedildi." << std::endl;
-                    std::cout << logName << " loglari filtrelenip " << outputFile << " dosyasina kaydedildi." << std::endl;
+                    std::cout << log << msg("log_filter_ok") << outFile << std::endl;
+                    reportFile << log << " filtered -> " << outFile << std::endl;
                 }
             }
         }
         else {
-            reportFile << "Olay raporlarý eklenmedi, sadece dump dosyalarý kopyalandi." << std::endl;
+            reportFile << (systemLang == Lang::TR ? "Olay raporlari eklenmedi, sadece dump dosyalarý kopyalandi." : "No event logs included, only dump files copied.") << std::endl;
         }
 
-        reportFile << "\nTaranan .dmp dosyalari DumpFinder klasorune kopyalanmýstir.\n";
+        reportFile << "\n" << msg("report_summary");
         if (secim == 1)
-            reportFile << "Ayrýca Application, System ve Security log dosyalari DmpGunluk klasörüne kopyalanmýstir ve kritik olaylar filtrelenmistir.(Beta)\n";
+            reportFile << msg("report_with_logs");
 
         reportFile.close();
-
-        std::cout << "\nTum islemler tamamlandi. Rapor olusturuldu: " << reportFilePath << std::endl;
+        std::cout << "\n" << msg("report_complete") << reportFilePath << std::endl;
     }
     catch (const fs::filesystem_error& e) {
-        std::cerr << "Bir hata olustu: " << e.what() << std::endl;
+        std::cerr << "Hata: " << e.what() << std::endl;
         if (reportFile.is_open()) reportFile.close();
         return 1;
     }
