@@ -196,7 +196,7 @@ int main() {
             std::string logs[] = { "Application", "System", "Security" };
             for (const auto& log : logs) {
                 std::string outFile = logFolder + "\\" + log + "_Filtered.txt";
-                std::string cmd = "wevtutil qe " + log + " /q:\"*[System[(Level=1 or Level=2 or Level=3)]]\" /f:text > \"" + outFile + "\"";
+                std::string cmd = "wevtutil qe " + log + " /q:\"*[System[(Level=1 or Level=2 or Level=3)]]\" /f:xml > \"" + outFile + "\"";
                 int ret = system(cmd.c_str());
                 if (ret != 0) {
                     std::cerr << log << msg("log_filter_fail") << std::endl;
